@@ -512,7 +512,7 @@ select option { background: #0f121d; color: #fff; }
   <section id="home">
     <div class="hero">
       <h1>Play Chess <em>Beautifully</em></h1>
-      <p>Challenge an intelligent AI engine or face a friend locally via Room Code.</p>
+      <p>Challenge an intelligent AI engine or face friends across different mobile devices via Room Code.</p>
       <div class="cards">
         <button class="hc" id="hAI">
           <b>♚ Human vs Engine</b>
@@ -520,7 +520,7 @@ select option { background: #0f121d; color: #fff; }
         </button>
         <button class="hc" id="hMP">
           <b>♞ Room Code Match</b>
-          <span>Instant pairing across browser tabs using 6-character room codes</span>
+          <span>Instant pairing across different phones using 6-character room codes</span>
         </button>
       </div>
     </div>
@@ -567,7 +567,9 @@ select option { background: #0f121d; color: #fff; }
 <div id="ov"><div id="md" role="dialog" aria-modal="true"></div></div>
 <div id="toasts" aria-live="polite"></div>
 
+<!-- Include chess.js and PeerJS for true cross-device internet multiplayer -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
 <script>
 'use strict';
 
@@ -684,7 +686,7 @@ function end(res,why){
   sfx(d?'draw':win?'win':'lose');render();ui();
   try{
     const a=JSON.parse(localStorage.getItem('aurumHist')||'[]');
-    a.unshift({t:new Date().toLocaleString(),m:mode=='ai'?'vs AI '+LV[lvl]:'Local Room',r:resText,n:ch.history().length});
+    a.unshift({t:new Date().toLocaleString(),m:mode=='ai'?'vs AI '+LV[lvl]:'Online Room',r:resText,n:ch.history().length});
     localStorage.setItem('aurumHist',JSON.stringify(a.slice(0,30)));
   }catch(e){}
   
@@ -709,7 +711,7 @@ function play(from,to,pr){if(over||ch.turn()!=me)return;const m=ch.move({from,to
 function tryMove(from,to){
   const c=ch.moves({square:from,verbose:true}).filter(m=>m.to==to);if(!c.length){sel=null;legal=[];render();return}
   if(c[0].promotion){
-    M(`<h2>Pawn Promotion</h2><div class=row>${['q','r','b','n'].map(p=>`<button data-p=${p} style="font-size:32px">${GL[p]}&#xFE0E;</button>`).join('')}</div>`);
+    M(`<h2>Pawn Promotion</h2><div class=row>${['q','r','b','n'].map(p=>`<button data-p=${p} style="font-size:32px">${GL[p]}&#xFE0E;</span></button>`).join('')}</div>`);
     document.querySelectorAll('#md [data-p]').forEach(b=>b.onclick=()=>{closeM();play(from,to,b.dataset.p)});
   }else play(from,to,undefined);
 }
@@ -756,27 +758,69 @@ function aiMove(){if(over||mode!='ai'||ch.turn()==me||think)return;think=true;ui
  setTimeout(()=>{let m,all=ch.moves({verbose:true});try{m=lvl==0&&Math.random()<.4?all[Math.random()*all.length|0]:search([1,2,3,6][lvl],[300,900,1800,3000][lvl])}catch(e){m=all[0]}
   think=false;if(over||!m)return;let r=ch.move(mv(m));if(!r)r=ch.move(mv(all[0]));if(r)after(r)},60)}
 
-/* ===== Local Room Code Multiplayer ===== */
+/* ===== Cross-Device PeerJS Multiplayer ===== */
 const nm=s=>String(s||'Opponent').slice(0,16);
-function netOpen(role){netClose();N={id:Math.random().toString(36).slice(2),role,conn:false,bc:null,peer:null,myR:0,theirR:0}}
-function netClose(){const n=N;if(!n)return;send({t:'bye'});N=null;try{n.bc&&n.bc.close()}catch(e){}}
-function send(m){if(!N)return;try{if(N.bc)N.bc.postMessage({...m,from:N.id})}catch(e){}}
-function bcOpen(code){N.bc=new BroadcastChannel('aurum-chess-'+code);N.bc.onmessage=e=>{const m=e.data;if(!m||typeof m!='object'||m.from===N.id||(m.to&&m.to!==N.id))return;
- if(!N.peer){if((N.role=='host'&&m.t=='join')||(N.role=='guest'&&m.t=='welcome'))N.peer=m.from;else return}else if(m.from!==N.peer)return;onNet(m)}}
-function startNet(){mode='net';newGame();sfx('join');toast(oppName+' connected!')}
+let peer=null,conn=null;
 
-function onNet(m){
-  if(!N||!m||typeof m.t!='string')return;
+function netClose(){
+  if(conn){try{conn.close()}catch(e){}}
+  if(peer){try{peer.destroy()}catch(e){}}
+  conn=null;peer=null;N=null;
+}
+
+function send(m){if(conn&&conn.open)conn.send(m)}
+
+function startNet(role, opponentName, assignedColor){
+  mode='net';
+  oppName=opponentName;
+  me=assignedColor;
+  N={conn:true};
+  newGame();
+  sfx('join');
+  toast(oppName+' connected!');
+}
+
+function onNetMessage(m){
+  if(!m||typeof m.t!='string')return;
   switch(m.t){
-    case'join':if(N.role!='host'||N.conn)return;N.conn=true;oppName=nm(m.name);me=Math.random()<.5?'w':'b';send({t:'welcome',to:N.peer,color:me=='w'?'b':'w',tc,name:S.name});startNet();break;
-    case'welcome':if(N.role!='guest'||N.conn||(m.color!='w'&&m.color!='b'))return;N.conn=true;me=m.color;tc=[0,1,3,5,10,15,30].includes(+m.tc)?+m.tc:10;oppName=nm(m.name);startNet();break;
-    case'move':if(!N.conn||over||ch.turn()==me||!/^[a-h][1-8]$/.test(m.from)||!/^[a-h][1-8]$/.test(m.to)||(m.promo&&!/^[qrbn]$/.test(m.promo)))return;
-     {const r=ch.move({from:m.from,to:m.to,promotion:m.promo||undefined});if(r)after(r);else toast('Invalid move rejected')}break;
-    case'resign':if(!over&&N.conn)end(me,'Opponent resigned');break;
-    case'draw':if(!over&&N.conn)ask('Draw Offer','Your opponent offers a draw. Accept?',()=>{send({t:'drawA'});end('d','Draw agreed')},()=>send({t:'drawD'}));break;
-    case'drawA':end('d','Draw agreed');break;case'drawD':toast('Draw offer declined');break;
-    case'rematch':N.theirR=1;if(N.myR)doRematch();else{toast('Opponent wants a rematch');const e=$('#rN');if(e)e.textContent='Opponent requested a rematch!'}break;
-    case'bye':peerGone();break;
+    case'join':
+      // Host receives join request from guest
+      if(N.role!='host'||N.conn)return;
+      N.conn=true;
+      oppName=nm(m.name);
+      me=Math.random()<.5?'w':'b';
+      const assignedColor=(me=='w'?'b':'w');
+      send({t:'welcome',color:assignedColor,tc,name:S.name});
+      startNet('host',oppName,me);
+      break;
+    case'welcome':
+      // Guest receives welcome from host
+      if(N.role!='guest'||N.conn||(m.color!='w'&&m.color!='b'))return;
+      N.conn=true;
+      me=m.color;
+      tc=[0,1,3,5,10,15,30].includes(+m.tc)?+m.tc:10;
+      startNet('guest',oppName,me);
+      break;
+    case'move':
+      if(!N.conn||over||ch.turn()==me||!/^[a-h][1-8]$/.test(m.from)||!/^[a-h][1-8]$/.test(m.to)||(m.promo&&!/^[qrbn]$/.test(m.promo)))return;
+      {const r=ch.move({from:m.from,to:m.to,promotion:m.promo||undefined});if(r)after(r);else toast('Invalid move rejected')}
+      break;
+    case'resign':
+      if(!over&&N.conn)end(me,'Opponent resigned');
+      break;
+    case'draw':
+      if(!over&&N.conn)ask('Draw Offer','Your opponent offers a draw. Accept?',()=>{send({t:'drawA'});end('d','Draw agreed')},()=>send({t:'drawD'}));
+      break;
+    case'drawA':end('d','Draw agreed');break;
+    case'drawD':toast('Draw offer declined');break;
+    case'rematch':
+      N.theirR=1;
+      if(N.myR)doRematch();
+      else{toast('Opponent wants a rematch');const e=$('#rN');if(e)e.textContent='Opponent requested a rematch!'}
+      break;
+    case'bye':
+      peerGone();
+      break;
   }
 }
 
@@ -792,18 +836,78 @@ function doRematch(){N.myR=N.theirR=0;me=me=='w'?'b':'w';newGame()}
 function leaveGame(){netClose();over=true;started=false;closeM();show('home')}
 
 const mSt=t=>{const e=$('#mSt');if(e)e.textContent=t};
+
 function mpModal(){
- M(`<h2>Room Matchmaking</h2><p class=sm style="text-align:center;opacity:0.8">Pair with another tab on this browser using a room code.</p>
- <label class=f>Time Control (Host)${tcSel('mTc',10)}</label>
- <div class=row><button class=gold id=mCreate>Create Room</button></div>
- <div id=mWait hidden><div class=code id=rc></div><p class=sm style="text-align:center;margin:8px 0"><span class=spin></span> Waiting for opponent...</p><div class=row><button id=mCopy>Copy Code</button><button id=mLeave>Cancel</button></div></div>
- <div class=row style="margin-top:8px"><input id=mCode maxlength=6 placeholder="ENTER CODE" aria-label="Room code" style="text-transform:uppercase;text-align:center;font-weight:700;letter-spacing:2px"><button id=mJoin>Join Room</button></div>
- <p id=mSt class=sm style="text-align:center;color:var(--gold-300)"></p>`);
- $('#mCreate').onclick=()=>{tc=+$('#mTc').value;netOpen('host');const c=Array.from(crypto.getRandomValues(new Uint8Array(6)),x=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[x%32]).join('');bcOpen(c);$('#mWait').hidden=false;$('#rc').textContent=c;mSt('Room '+c+' generated.')};
- $('#mCopy').onclick=()=>copy($('#rc').textContent);
- $('#mLeave').onclick=()=>{netClose();$('#mWait').hidden=true;mSt('Room cancelled.')};
- $('#mJoin').onclick=()=>{const c=$('#mCode').value.trim().toUpperCase();if(!/^[A-Z0-9]{6}$/.test(c))return mSt('Enter a valid 6-character code.');netOpen('guest');bcOpen(c);send({t:'join',name:S.name});mSt('Joining room '+c+'...');
-  setTimeout(()=>{if(N&&!N.conn)mSt('Room not found. Ensure host tab is open.')},3500)};
+  M(`<h2>Online Matchmaking</h2><p class=sm style="text-align:center;opacity:0.8">Play with a friend on a different mobile device using a room code.</p>
+  <label class=f>Time Control (Host)${tcSel('mTc',10)}</label>
+  <div class=row><button class=gold id=mCreate>Create Room</button></div>
+  <div id=mWait hidden><div class=code id=rc></div><p class=sm style="text-align:center;margin:8px 0"><span class=spin></span> Waiting for opponent...</p><div class=row><button id=mCopy>Copy Code</button><button id=mLeave>Cancel</button></div></div>
+  <div class=row style="margin-top:8px"><input id=mCode maxlength=6 placeholder="ENTER CODE" aria-label="Room code" style="text-transform:uppercase;text-align:center;font-weight:700;letter-spacing:2px"><button id=mJoin>Join Room</button></div>
+  <p id=mSt class=sm style="text-align:center;color:var(--gold-300)"></p>`);
+
+  $('#mCreate').onclick=()=>{
+    tc=+$('#mTc').value;
+    netClose();
+    // Generate a clean 6-character alphanumeric room code
+    const c=Array.from(crypto.getRandomValues(new Uint8Array(6)),x=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[x%32]).join('');
+    
+    mSt('Creating room...');
+    // Prefix ID to avoid collisions on public PeerJS server
+    peer=new Peer('aurum-'+c);
+    
+    peer.on('open',()=>{
+      N={role:'host',conn:false,myR:0,theirR:0};
+      $('#mWait').hidden=false;
+      $('#rc').textContent=c;
+      mSt('Room ready! Share this code with your friend.');
+    });
+
+    peer.on('connection', cObj=>{
+      conn=cObj;
+      conn.on('data',d=>onNetMessage(d));
+      conn.on('close',()=>peerGone());
+    });
+
+    peer.on('error',err=>{
+      mSt('Error creating room. Try another code or check connection.');
+    });
+  };
+
+  $('#mCopy').onclick=()=>copy($('#rc').textContent);
+
+  $('#mLeave').onclick=()=>{
+    netClose();
+    $('#mWait').hidden=true;
+    mSt('Room cancelled.');
+  };
+
+  $('#mJoin').onclick=()=>{
+    const c=$('#mCode').value.trim().toUpperCase();
+    if(!/^[A-Z0-9]{6}$/.test(c))return mSt('Enter a valid 6-character code.');
+    netClose();
+    mSt('Connecting to room '+c+'...');
+
+    // Guest creates random peer ID and connects to host's peer ID
+    peer=new Peer();
+
+    peer.on('open',id=>{
+      conn=peer.connect('aurum-'+c);
+      
+      conn.on('open',()=>{
+        N={role:'guest',conn:false,myR:0,theirR:0};
+        oppName='Host';
+        // Send join handshake
+        conn.send({t:'join',name:S.name});
+      });
+
+      conn.on('data',d=>onNetMessage(d));
+      conn.on('close',()=>peerGone());
+    });
+
+    peer.on('error',err=>{
+      mSt('Could not connect. Check room code or ensure host is waiting.');
+    });
+  };
 }
 
 /* ===== Menu & Controls ===== */
@@ -825,7 +929,7 @@ function settings(){
   <div class=row><label><input type=checkbox id=sS style="width:auto" ${S.snd?'checked':''}> Sound Effects</label><label><input type=checkbox id=sM style="width:auto" ${S.music?'checked':''}> Ambient Music</label></div>
   <label class=f>Music Volume<input type=range id=sMv min=0 max=.5 step=.01 value=${S.mus}></label>
   <label class=f>Effects Volume<input type=range id=sEv min=0 max=1 step=.01 value=${S.sfx}></label>`);
-  const up=()=>{S.name=$('#sN').value.trim()||'Player';S.bt=$('#sB').value;S.pt=$('#sP').value;S.snd=$('#sS').checked?1:0;S.music=$('#sM').checked?1:0;S.mus=+$('#sMv').value;S.sfx=+$('#sEv').value;save();applyS();if(S.snd){aud();music()}if(started)ui()};
+  const up=()=>{S.name=$('#sN'.value.trim()||'Player');S.bt=$('#sB').value;S.pt=$('#sP').value;S.snd=$('#sS').checked?1:0;S.music=$('#sM').checked?1:0;S.mus=+$('#sMv').value;S.sfx=+$('#sEv').value;save();applyS();if(S.snd){aud();music()}if(started)ui()};
   document.querySelectorAll('#md input,#md select').forEach(e=>e.oninput=up);
 }
 
